@@ -60,6 +60,8 @@ async function launchBrowser(fingerprint, extensions = [], profileId = 'default'
     }
     const browser = await puppeteer.launch({
         headless: true,
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/opt/render/.cache/puppeteer/chrome/linux-127.0.6533.88/chrome-linux64/chrome',
+        userDataDir: '/opt/render/.cache/puppeteer',
         args
     });
     const page = await browser.newPage();
@@ -156,10 +158,11 @@ app.post('/launch-profile', async (req, res) => {
         const profileId = req.body.profileId || 'default';
         const extensions = req.body.extensions || [];
         const { browser, page } = await launchBrowser(fingerprint, extensions, profileId);
-        await page.goto('https://api.ipify.org?format=json');
-        const ip = await page.evaluate(() => document.body.innerText).then(text => JSON.parse(text).ip);
+        await page.goto('https://browserleaks.com/cookies');
+        const cookies = await page.cookies();
+        const screenshot = await page.screenshot({ encoding: 'base64' });
         await browser.close();
-        res.json({ fingerprint, profileId, ip });
+        res.json({ fingerprint, profileId, cookies, screenshot });
     } catch (error) {
         res.status(500).json({ error: 'Failed to launch profile: ' + error.message });
     }
@@ -170,10 +173,10 @@ app.post('/launch-with-extensions', async (req, res) => {
         const fingerprint = req.body.fingerprint || generateFingerprint();
         const extensions = req.body.extensions || [];
         const { browser, page } = await launchBrowser(fingerprint, extensions);
-        await page.goto('https://api.ipify.org?format=json');
-        const ip = await page.evaluate(() => document.body.innerText).then(text => JSON.parse(text).ip);
+        await page.goto('chrome://extensions/');
+        const screenshot = await page.screenshot({ encoding: 'base64' });
         await browser.close();
-        res.json({ fingerprint, ip });
+        res.json({ fingerprint, screenshot });
     } catch (error) {
         res.status(500).json({ error: 'Failed to launch with extensions: ' + error.message });
     }
