@@ -50,8 +50,7 @@ async function launchBrowser(fingerprint, extensions = [], profileId = 'default'
         `--user-agent=${fingerprint.userAgent}`,
         `--window-size=${fingerprint.screen.width},${fingerprint.screen.height}`,
         `--disable-web-security`,
-        `--disable-features=WebRtc`,
-        `--user-data-dir=${userDataDir}`
+        `--disable-features=WebRtc,Telemetry,SitePerProcess`
     ];
     if (proxy) {
         args.push(`--proxy-server=${proxy.host}:${proxy.port}`);
@@ -103,6 +102,26 @@ async function launchBrowser(fingerprint, extensions = [], profileId = 'default'
 // API Endpoints
 app.get('/', (req, res) => {
     res.send('Beast Antidetection Browser Backend');
+});
+
+app.get('/ui', (req, res) => {
+    res.send(`
+        <html>
+            <head><title>Beast Browser</title></head>
+            <body>
+                <h1>Beast Antidetection Browser</h1>
+                <button onclick="fetchFingerprint()">New Fingerprint</button>
+                <pre id="output"></pre>
+                <script>
+                    async function fetchFingerprint() {
+                        const res = await fetch('/new-fingerprint');
+                        const data = await res.json();
+                        document.getElementById('output').innerText = JSON.stringify(data, null, 2);
+                    }
+                </script>
+            </body>
+        </html>
+    `);
 });
 
 app.get('/new-fingerprint', async (req, res) => {
