@@ -4,6 +4,7 @@
     "main": "server.js",
     "scripts": {
         "start": "node server.js",
+        "build": "npx puppeteer browsers install chrome",
         "electron": "electron ."
     },
     "engines": {
@@ -20,4 +21,5 @@
     "author": "",
     "license": "ISC"
 }
+
 
