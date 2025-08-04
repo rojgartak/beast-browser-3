@@ -1,6 +1,8 @@
 const express = require('express');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const fs = require('fs');
+const path = require('path');
 const app = express();
 app.use(express.json());
 
@@ -37,67 +39,64 @@ function generateFingerprint() {
 }
 
 // Launch Browser with Fingerprint
-async function launchBrowser(fingerprint) {
+async function launchBrowser(fingerprint, extensions = [], profileId = 'default', proxy = null) {
+    const userDataDir = path.join(__dirname, 'profiles', profileId);
+    if (!fs.existsSync(userDataDir)) {
+        fs.mkdirSync(userDataDir, { recursive: true });
+    }
+    const args = [
+        `--no-sandbox`,
+        `--disable-setuid-sandbox`,
+        `--user-agent=${fingerprint.userAgent}`,
+        `--window-size=${fingerprint.screen.width},${fingerprint.screen.height}`,
+        `--disable-web-security`,
+        `--disable-features=WebRtc`,
+        `--user-data-dir=${userDataDir}`
+    ];
+    if (proxy) {
+        args.push(`--proxy-server=${proxy.host}:${proxy.port}`);
+    }
+    if (extensions.length > 0) {
+        args.push(`--load-extension=${extensions.join(',')}`);
+    }
     const browser = await puppeteer.launch({
         headless: true,
-        args: [
-            `--no-sandbox`,
-            `--disable-setuid-sandbox`,
-            `--user-agent=${fingerprint.userAgent}`,
-            `--window-size=${fingerprint.screen.width},${fingerprint.screen.height}`,
-            `--disable-web-security`,
-            `--disable-features=WebRtc`
-        ]
+        args
     });
     const page = await browser.newPage();
-
-    // Apply Fingerprint Settings
+    if (proxy && proxy.username && proxy.password) {
+        await page.authenticate({ username: proxy.username, password: proxy.password });
+    }
     await page.evaluateOnNewDocument((fp) => {
-        // Timezone
         Object.defineProperty(Intl, 'DateTimeFormat', {
             value: () => ({ resolvedOptions: () => ({ timeZone: fp.timezone }) })
         });
-
-        // Language
         Object.defineProperty(navigator, 'language', { value: fp.language, writable: false });
         Object.defineProperty(navigator, 'languages', { value: [fp.language], writable: false });
-
-        // Hardware Concurrency
         Object.defineProperty(navigator, 'hardwareConcurrency', { value: fp.hardwareConcurrency });
-
-        // WebGL
         const getParameter = WebGLRenderingContext.prototype.getParameter;
         WebGLRenderingContext.prototype.getParameter = function(parameter) {
             if (parameter === 37445) return fp.webGL.vendor;
             if (parameter === 37446) return fp.webGL.renderer;
             return getParameter.apply(this, arguments);
         };
-
-        // Canvas
         const getImageData = HTMLCanvasElement.prototype.getContext('2d').getImageData;
         HTMLCanvasElement.prototype.getContext('2d').getImageData = function() {
             const data = getImageData.apply(this, arguments);
             data.data[0] += fp.canvas.noise;
             return data;
         };
-
-        // AudioContext
         const getChannelData = AudioBuffer.prototype.getChannelData;
         AudioBuffer.prototype.getChannelData = function() {
             const data = getChannelData.apply(this, arguments);
             for (let i = 0; i < data.length; i++) data[i] += fp.audioContext.noise;
             return data;
         };
-
-        // Fonts
         Object.defineProperty(document, 'fonts', {
             value: { check: () => fp.fonts.includes(arguments[0]) }
         });
-
-        // WebRTC
         Object.defineProperty(navigator, 'mediaDevices', { value: undefined });
     }, fingerprint);
-
     return { browser, page };
 }
 
@@ -107,21 +106,92 @@ app.get('/', (req, res) => {
 });
 
 app.get('/new-fingerprint', async (req, res) => {
-    const fingerprint = generateFingerprint();
-    const { browser, page } = await launchBrowser(fingerprint);
-    await page.goto('https://api.ipify.org?format=json');
-    const content = await page.content();
-    await browser.close();
-    res.json({ fingerprint, ip: JSON.parse(content).ip });
+    try {
+        const fingerprint = generateFingerprint();
+        const { browser, page } = await launchBrowser(fingerprint);
+        await page.goto('https://api.ipify.org?format=json');
+        const ip = await page.evaluate(() => document.body.innerText).then(text => JSON.parse(text).ip);
+        await browser.close();
+        res.json({ fingerprint, ip });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to generate fingerprint: ' + error.message });
+    }
 });
 
 app.post('/custom-fingerprint', async (req, res) => {
-    const fingerprint = req.body.fingerprint || generateFingerprint();
-    const { browser, page } = await launchBrowser(fingerprint);
-    await page.goto('https://api.ipify.org?format=json');
-    const content = await page.content();
-    await browser.close();
-    res.json({ fingerprint, ip: JSON.parse(content).ip });
+    try {
+        const fingerprint = req.body.fingerprint || generateFingerprint();
+        const { browser, page } = await launchBrowser(fingerprint);
+        await page.goto('https://api.ipify.org?format=json');
+        const ip = await page.evaluate(() => document.body.innerText).then(text => JSON.parse(text).ip);
+        await browser.close();
+        res.json({ fingerprint, ip });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to process custom fingerprint: ' + error.message });
+    }
+});
+
+app.post('/launch-profile', async (req, res) => {
+    try {
+        const fingerprint = req.body.fingerprint || generateFingerprint();
+        const profileId = req.body.profileId || 'default';
+        const extensions = req.body.extensions || [];
+        const { browser, page } = await launchBrowser(fingerprint, extensions, profileId);
+        await page.goto('https://api.ipify.org?format=json');
+        const ip = await page.evaluate(() => document.body.innerText).then(text => JSON.parse(text).ip);
+        await browser.close();
+        res.json({ fingerprint, profileId, ip });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to launch profile: ' + error.message });
+    }
+});
+
+app.post('/launch-with-extensions', async (req, res) => {
+    try {
+        const fingerprint = req.body.fingerprint || generateFingerprint();
+        const extensions = req.body.extensions || [];
+        const { browser, page } = await launchBrowser(fingerprint, extensions);
+        await page.goto('https://api.ipify.org?format=json');
+        const ip = await page.evaluate(() => document.body.innerText).then(text => JSON.parse(text).ip);
+        await browser.close();
+        res.json({ fingerprint, ip });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to launch with extensions: ' + error.message });
+    }
+});
+
+app.post('/bulk-launch', async (req, res) => {
+    try {
+        const profiles = req.body.profiles || [];
+        const results = [];
+        for (const profile of profiles) {
+            const fingerprint = profile.fingerprint || generateFingerprint();
+            const profileId = profile.profileId || `profile-${Math.random().toString(36).substring(2)}`;
+            const extensions = profile.extensions || [];
+            const proxy = profile.proxy || null;
+            const { browser, page } = await launchBrowser(fingerprint, extensions, profileId, proxy);
+            await page.goto('https://api.ipify.org?format=json');
+            const ip = await page.evaluate(() => document.body.innerText).then(text => JSON.parse(text).ip);
+            await browser.close();
+            results.push({ profileId, fingerprint, ip });
+        }
+        res.json(results);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to bulk launch: ' + error.message });
+    }
+});
+
+app.get('/test-fingerprint', async (req, res) => {
+    try {
+        const fingerprint = generateFingerprint();
+        const { browser, page } = await launchBrowser(fingerprint);
+        await page.goto('https://pixelscan.net');
+        const screenshot = await page.screenshot({ encoding: 'base64' });
+        await browser.close();
+        res.json({ fingerprint, screenshot });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to test fingerprint: ' + error.message });
+    }
 });
 
 app.listen(process.env.PORT || 3001, () => {
